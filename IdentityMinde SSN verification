@@ -1,0 +1,128 @@
+[HttpPost]
+        [Route("SSNumberVerify")]
+        public async Task<HttpResponseMessage> SSNumberVerify(int accountId, string ssnno)
+        {
+            string Message = "";
+            string resultCode = null;
+            string ssb = null;
+            int FallThrough1 = 1003;
+            int FallThrough2 = 1004;
+            int FallThrough3 = 1002;
+            List<string> FiredErrorValue = new List<string>();
+            int RuleIdError1 = 1;
+            int RuleIdError2 = 1;
+            int RuleIdError3 = 1;
+            string ssnvalid = ssnno;
+            try
+            {
+                if (dataContext == null)
+                    dataContext = new TurnKeyBrokerSignUpDataContext();
+                var adder = dataContext.tb_addresses.Where(t => t.account_id == accountId).FirstOrDefault();
+                var q1 = (from tacc in dataContext.tb_accounts
+                          join tadd in dataContext.tb_addresses on tacc.account_id equals tadd.account_id
+                          join tpar in dataContext.tb_patriots on tacc.account_id equals tpar.account_id
+                          where (tacc.account_id == accountId)
+                          select new
+                          {
+                              tacc.account_type_id,
+                              tacc.customer_id,
+                              tacc.password,
+                              tacc.tax_id,
+                              tacc.email_address,
+                              tacc.identification_file,
+                              tadd.first_name,
+                              tadd.last_name,
+                              tadd.address_1,
+                              tadd.address_2,
+                              tadd.city,
+                              tadd.state,
+                              tadd.zipcode,
+                              tadd.country_id,
+                              tadd.work_phone,
+                              tpar.date_of_birth,
+                              tpar.identification_type_id,
+                              tpar.residence_country_id
+                          }).FirstOrDefault();
+                var ctry1 = dataContext.tb_countries.Where(x => x.country_id == q1.residence_country_id).FirstOrDefault();
+                string username = (adder.first_name + adder.last_name);
+          
+                ssb = ctry1.country_initial + ":" + ssnno;
+                var client = new HttpClient();
+                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.Default.GetBytes("tradezero:36654bbdcf07af9dc8b7b89ca48eb2168b3847f3")));
+                var parameters = new Dictionary<string, string>()
+                 {
+                          {"man",q1.email_address },
+                          {"bfn",q1.first_name },
+                          {"bln",q1.last_name },
+                          {"dob",q1.date_of_birth },
+                          {"assn",ssb },
+                          {"bco",ctry1.country_initial },
+                          {"stage","3" },
+
+                     };
+                var request = new HttpRequestMessage()
+                {
+                    RequestUri = new Uri("https://staging.identitymind.com/im/account/consumer"),//, "exchange_token"
+                    Method = HttpMethod.Post,
+                    Content = new StringContent(JsonConvert.SerializeObject(parameters), Encoding.UTF8, "application/json")
+                };
+                var requestResult = await client.SendAsync(request);
+                var Address = requestResult.Content.ReadAsStringAsync();
+                JavaScriptSerializer json_serializer = new JavaScriptSerializer();
+                SSNDocumentVerificationViewModel obj = new JavaScriptSerializer().Deserialize<SSNDocumentVerificationViewModel>(Address.Result);
+                RuleIdError1 = obj.ednaScoreCard.er.reportedRule.ruleId.CompareTo(FallThrough1);
+                RuleIdError2 = obj.ednaScoreCard.er.reportedRule.ruleId.CompareTo(FallThrough2);
+                RuleIdError3 = obj.ednaScoreCard.er.reportedRule.ruleId.CompareTo(FallThrough3);
+                var CheckFiredValue = obj.ednaScoreCard.etr.Where(x => x.fired == true).ToList();
+                string[] FiredArray = new string[CheckFiredValue.Count];
+
+                if (CheckFiredValue != null)
+                {
+                    for (int i = 0; i <= CheckFiredValue.Count - 1; i++)
+                    {
+                        FiredArray[i] = CheckFiredValue[i].test;
+                        FiredErrorValue.Add(CheckFiredValue[i].test);
+                    }
+                }
+                resultCode = JObject.Parse(Address.Result)["frp"].ToString();
+
+                
+
+            }
+            catch (Exception ex)
+            {
+                Message = "No National id country specified, and Invalid format for US Social Security Number";
+            }
+            Signup obje = new Signup();
+           
+
+            if (RuleIdError1 == 0 || RuleIdError2 == 0)
+            {
+                if (RuleIdError1 == 0)
+                    obje.Status1 = " Rule not passed";
+                else
+                    obje.Status1 = " Rule not passed";
+                Message = "SSN " + ssnvalid + " is Invalid.";
+            }
+            else
+            {
+                if (RuleIdError3 == 0)
+                {
+                    obje.Status1 = "Need Manual Reviewing";
+                    obje.status = 0;      //  0 for true and need manual testing 
+                }
+                else
+                {
+                    obje.Status1 = "Success";
+                    obje.status = 0;
+                }
+                Message = "SSN " + ssnvalid + " is Valid.";
+                var acc = dataContext.tb_accounts.Where(t => t.account_id == accountId).FirstOrDefault();
+                acc.tax_id = ssb;
+                ssnvalid = ssb;
+                dataContext.SubmitChanges();
+            }
+            obje.Message = Message;
+            obje.FiredErrors = FiredErrorValue;
+            return Request.CreateResponse(HttpStatusCode.OK, obje);
+        }
